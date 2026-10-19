@@ -39,6 +39,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -272,9 +273,21 @@ def get_cron():
 
 
 def without_old_monitor(text):
-    return "".join(line for line in text.splitlines(True)
-                   if line.lstrip().startswith("#") or not re.search(
-                       r"(?:^|[\s/])brook-pf\.sh\s+monitor(?:\s|$)", line))
+    kept = []
+    for line in text.splitlines(True):
+        try:
+            tokens = shlex.split(line, comments=True)
+        except ValueError:
+            kept.append(line)
+            continue
+        command = tokens[1:] if tokens and tokens[0].startswith("@") else tokens[5:]
+        if command and Path(command[0]).name in ("bash", "sh"):
+            command = command[1:]
+        is_monitor = (len(command) == 2 and Path(command[0]).name == "brook-pf.sh"
+                      and command[1] == "monitor")
+        if not is_monitor:
+            kept.append(line)
+    return "".join(kept)
 
 
 def legacy_pids():

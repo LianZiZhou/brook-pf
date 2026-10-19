@@ -43,9 +43,11 @@ class ConfigTests(unittest.TestCase):
 
     def test_monitor_cleanup_only_matches_legacy_command(self):
         original = ("# /root/brook-pf.sh monitor\n* * * * * /bin/bash /root/brook-pf.sh monitor\n"
-                    "* * * * * /root/other.sh monitor\n* * * * * /root/brook-pf.sh status\n")
+                    "* * * * * /root/other.sh monitor\n* * * * * /root/brook-pf.sh status\n"
+                    "* * * * * echo /root/brook-pf.sh monitor\n")
         self.assertEqual(m.without_old_monitor(original), original.replace(
             "* * * * * /bin/bash /root/brook-pf.sh monitor\n", ""))
+        self.assertEqual(m.without_old_monitor('* * * * * bash "/a b/brook-pf.sh" monitor\n'), "")
 
 
 class ReleaseTests(unittest.TestCase):
