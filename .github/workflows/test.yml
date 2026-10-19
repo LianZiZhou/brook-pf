@@ -1,0 +1,46 @@
+name: Tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests and standalone script checks
+        run: |
+          python3 -m unittest discover -s tests -v
+          bash brook-pf.sh --help
+          printf '0\n' | bash brook-pf.sh menu
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [ubuntu, rocky]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build disposable systemd environment
+        run: docker build -t brook-pf-test -f tests/Dockerfile.${{ matrix.distro }} .
+      - name: Start systemd
+        run: |
+          docker run -d --name brook-pf-ci --privileged --cgroupns=private \
+            --tmpfs /run --tmpfs /run/lock -v "$PWD:/src:ro" -w /src brook-pf-test
+          for attempt in $(seq 1 30); do
+            if docker exec brook-pf-ci systemctl list-units >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Verify release, TCP/UDP, IPv6, migration and rollback
+        run: docker exec -e BROOK_PF_INTEGRATION=1 brook-pf-ci python3 tests/integration.py
+      - name: Diagnostics and cleanup
+        if: always()
+        run: |
+          docker exec brook-pf-ci journalctl -u brook-pf --no-pager || true
+          docker rm -f brook-pf-ci || true

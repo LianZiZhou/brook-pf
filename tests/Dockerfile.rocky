@@ -1,0 +1,5 @@
+FROM rockylinux:9
+ENV container=docker
+RUN dnf install -y python3 ca-certificates systemd dbus cronie iproute && dnf clean all
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
