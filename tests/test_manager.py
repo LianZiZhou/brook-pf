@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -136,6 +137,29 @@ class TransactionTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "standalone launcher targets Linux; exercised in CI/containers")
+    def test_non_utf8_console(self):
+        # Exercise the shipped launcher, not merely an imported helper. The old
+        # script failed at its first Chinese print and escaped stderr as \\uXXXX.
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "brook.conf"
+            config.write_text("# 中文注释\n10000 example.com 443 1\n", encoding="utf-8")
+            for encoding in ("latin-1", "ascii"):
+                env = dict(os.environ, LANG="C", LC_ALL="C", PYTHONUTF8="0",
+                           PYTHONCOERCECLOCALE="0", PYTHONIOENCODING=encoding)
+                cases = [(["check", str(config)], b"", 0, "配置有效"),
+                         (["menu"], b"0\n", 0, "请选择"),
+                         (["check", str(config) + ".missing"], b"", 1, "错误：")]
+                for args, stdin, status, message in cases:
+                    with self.subTest(encoding=encoding, args=args):
+                        result = subprocess.run(["bash", str(ROOT / "brook-pf.sh")] + args,
+                                                env=env, input=stdin, stdout=subprocess.PIPE,
+                                                stderr=subprocess.PIPE)
+                        output = (result.stdout + result.stderr).decode("utf-8")
+                        self.assertEqual(result.returncode, status, output)
+                        self.assertIn(message, output)
+                        self.assertNotIn("codec can't encode", output)
+
     def test_generated_script_is_current(self):
         spec = importlib.util.spec_from_file_location("build", ROOT / "scripts/build.py")
         build = importlib.util.module_from_spec(spec)

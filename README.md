@@ -37,6 +37,8 @@ sudo bash /usr/local/brook-pf/brook-pf.sh
 
 如果 Python 已存在但缺少 CA 证书，请先用系统包管理器安装 `ca-certificates`。不要添加 `--no-check-certificate` 或 `curl -k`。
 
+从 v2.0.1 起，脚本固定使用 UTF-8 输入输出，兼容 `C`/ASCII locale 及继承了 `PYTHONIOENCODING=latin-1` 的环境，无需修改服务器的系统语言设置。若 v2.0.0 安装时出现 `'latin-1' codec can't encode characters`，重新下载新版后执行 `install` 即可。
+
 ## 常用操作
 
 以下命令均在目标服务器执行。可直接使用菜单，也可使用命令行：

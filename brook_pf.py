@@ -21,7 +21,7 @@ import tempfile
 import time
 import urllib.request
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 BASE = Path("/usr/local/brook-pf")
 CONF = BASE / "brook.conf"
 BIN = BASE / "brook"
@@ -223,7 +223,7 @@ def stage_binary(directory, version="latest", checksum=None):
         raise ValueError("版本号示例：v20270101")
     metadata_path = directory / "release.json"
     fetch(API + ("latest" if version == "latest" else "tags/" + version), metadata_path, 4 * 1024 * 1024)
-    tag, url, digest = release_asset(json.loads(metadata_path.read_text()), architecture(), version, checksum)
+    tag, url, digest = release_asset(json.loads(metadata_path.read_text(encoding="utf-8")), architecture(), version, checksum)
     print("下载并校验 Brook {} ({})…".format(tag, architecture()), flush=True)
     candidate = directory / "brook"
     fetch(url, candidate)
@@ -350,7 +350,7 @@ class Transaction:
 
     def rollback(self):
         print("操作失败，恢复原文件与服务状态…", file=sys.stderr)
-        if UNIT.exists() and "# Managed by brook-pf v2" in UNIT.read_text():
+        if UNIT.exists() and "# Managed by brook-pf v2" in UNIT.read_text(encoding="utf-8"):
             systemctl("stop", SERVICE, check=False)
             # Remove new enable links BEFORE restoring a legacy init script.
             systemctl("disable", SERVICE, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -395,7 +395,7 @@ def install(version="latest", checksum=None, preserve_state=False):
         raise ValueError("请运行生成的 brook-pf.sh 安装")
     rules = read_rules() if CONF.exists() else []
     is_old = INIT.exists() or bool(legacy_pids())
-    if UNIT.exists() and "# Managed by brook-pf v2" not in UNIT.read_text():
+    if UNIT.exists() and "# Managed by brook-pf v2" not in UNIT.read_text(encoding="utf-8"):
         raise ValueError("存在非本脚本管理的原生 systemd 单元，请先人工检查 " + str(UNIT))
     with tempfile.TemporaryDirectory(prefix="brook-pf-") as directory:
         candidate, metadata = stage_binary(Path(directory), version, checksum)
@@ -503,7 +503,7 @@ def relay_is_listening(pid, local_port):
         path = Path("/proc/net") / proto
         if not path.exists():
             continue
-        for line in path.read_text().splitlines()[1:]:
+        for line in path.read_text(encoding="ascii").splitlines()[1:]:
             fields = line.split()
             if (len(fields) > 9 and fields[9] in inodes and
                     int(fields[1].rsplit(":", 1)[1], 16) == local_port and
