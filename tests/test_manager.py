@@ -148,7 +148,7 @@ class BuildTests(unittest.TestCase):
                 env = dict(os.environ, LANG="C", LC_ALL="C", PYTHONUTF8="0",
                            PYTHONCOERCECLOCALE="0", PYTHONIOENCODING=encoding)
                 cases = [(["check", str(config)], b"", 0, "配置有效"),
-                         (["menu"], b"0\n", 0, "请选择"),
+                         (["menu"], b"99\n", 0, "请输入数字 [0-10]"),
                          (["check", str(config) + ".missing"], b"", 1, "错误：")]
                 for args, stdin, status, message in cases:
                     with self.subTest(encoding=encoding, args=args):

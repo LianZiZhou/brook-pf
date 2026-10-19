@@ -21,12 +21,13 @@ import tempfile
 import time
 import urllib.request
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 BASE = Path("/usr/local/brook-pf")
 CONF = BASE / "brook.conf"
 BIN = BASE / "brook"
 MANAGER = BASE / "brook-pf.sh"
 UNIT = Path("/etc/systemd/system/brook-pf.service")
+MONITOR = Path("/etc/systemd/system/brook-pf.service.d/monitor.conf")
 INIT = Path("/etc/init.d/brook-pf")
 BACKUPS = Path("/var/backups/brook-pf")
 SERVICE = "brook-pf.service"
@@ -577,13 +578,65 @@ def firewall(local=None, apply=False):
 
 def uninstall():
     # Keep user config and snapshots; remove only manager-owned executable/unit files.
-    with Transaction([BIN, MANAGER, UNIT, BASE / "installed.json"]):
+    with Transaction([BIN, MANAGER, UNIT, BASE / "installed.json", MONITOR]):
         systemctl("disable", "--now", SERVICE)
-        for path in (BIN, MANAGER, UNIT, BASE / "installed.json"):
+        for path in (BIN, MANAGER, UNIT, BASE / "installed.json", MONITOR):
             if path.exists():
                 path.unlink()
         systemctl("daemon-reload")
     print("已卸载服务和程序；brook.conf、备份及防火墙规则保留。")
+
+
+def self_update():
+    with tempfile.TemporaryDirectory(prefix="brook-pf-update-") as directory:
+        directory = Path(directory)
+        metadata_path = directory / "release.json"
+        fetch("https://api.github.com/repos/LianZiZhou/brook-pf/releases/latest", metadata_path, 4 * 1024 * 1024)
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        tag = metadata.get("tag_name", "")
+        if (not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or
+                metadata.get("draft") or metadata.get("prerelease")):
+            raise ValueError("管理脚本发布信息无效")
+        matches = [item for item in metadata.get("assets", []) if item.get("name") == "brook-pf.sh"]
+        if len(matches) != 1:
+            raise ValueError("未找到唯一的管理脚本发布附件")
+        asset = matches[0]
+        url = "https://github.com/LianZiZhou/brook-pf/releases/download/{}/brook-pf.sh".format(tag)
+        digest = asset.get("digest") or ""
+        if asset.get("browser_download_url") != url or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise ValueError("管理脚本发布地址或 SHA256 无效")
+        candidate = directory / "brook-pf.sh"
+        fetch(url, candidate, 4 * 1024 * 1024)
+        data = candidate.read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest[7:]:
+            raise ValueError("管理脚本 SHA256 校验失败")
+        if not data.startswith(b"#!/usr/bin/env bash\n"):
+            raise ValueError("管理脚本格式无效")
+        run(["bash", "-n", candidate])
+        marker = b"<<'__BROOK_PF_PYTHON__'\n"
+        if marker not in data or not data.endswith(b"\n__BROOK_PF_PYTHON__\n"):
+            raise ValueError("管理脚本缺少 Python 程序")
+        program = data.split(marker, 1)[1].rsplit(b"\n__BROOK_PF_PYTHON__\n", 1)[0]
+        compile(program.decode("utf-8"), "brook-pf.sh", "exec")
+        destinations = list(dict.fromkeys([SOURCE] + ([MANAGER] if installed() else [])))
+        with Transaction(destinations):
+            for path in destinations:
+                atomic_write(path, data, 0o755)
+    print("脚本已更新为最新版本[ {} ] ! 请重新运行脚本。".format(tag))
+
+
+def monitor_enabled():
+    result = systemctl("show", SERVICE, "--property=Restart", "--value", stdout=subprocess.PIPE)
+    return result.stdout.decode("ascii").strip() != "no"
+
+
+def set_monitor(state):
+    with Transaction([MONITOR]):
+        atomic_write(MONITOR, "[Service]\nRestart={}\n".format("always" if state else "no"))
+        systemctl("daemon-reload")
+        if monitor_enabled() != state:
+            raise RuntimeError("监控设置未生效")
+    print("{} Brook 服务端运行状态监控功能 {}成功 !".format(color("[信息]"), "启动" if state else "停止"))
 
 
 def requirements():
@@ -625,38 +678,225 @@ def parser():
     item.add_argument("--apply", action="store_true")
     item = sub.add_parser("uninstall")
     item.add_argument("--yes", action="store_true")
-    for name in ("list", "start", "stop", "restart", "status", "logs", "run", "menu", "monitor"):
+    for name in ("list", "start", "stop", "restart", "status", "logs", "run", "menu", "monitor",
+                 "self-update", "monitor-on", "monitor-off"):
         sub.add_parser(name)
     return p
 
 
-def menu():
-    print("\nBrook 端口转发管理 v{}\n1. 安装/迁移  2. 更新 Brook  3. 卸载\n4. 启动  5. 停止  6. 重启\n7. 管理规则  8. 查看规则  9. 日志\n10. 状态  11. 防火墙  0. 退出".format(VERSION))
-    answer = input("请选择：").strip()
-    simple = {"1": "install", "2": "update", "3": "uninstall", "4": "start", "5": "stop",
-              "6": "restart", "8": "list", "9": "logs", "10": "status", "11": "firewall"}
-    if answer == "0":
-        return
-    if answer in simple:
-        main([simple[answer]])
-    elif answer == "7":
-        operation = input("1. 添加  2. 删除  3. 修改  4. 启用  5. 禁用：").strip()
-        actions = {"1": "add", "2": "delete", "3": "set", "4": "enable", "5": "disable"}
-        if operation not in actions:
-            raise ValueError("无效选项")
-        args = [actions[operation], input("本地端口：").strip()]
-        if operation in ("1", "3"):
-            args += [input("目标 IP/域名：").strip(), input("目标端口：").strip(),
-                     "--listen", input("监听 IP [0.0.0.0]：").strip() or "0.0.0.0"]
-            if input("立即启用？[Y/n]：").strip().lower() == "n":
+def color(text, code="32"):
+    return "\033[{}m{}\033[0m".format(code, text)
+
+
+class MenuCancelled(Exception):
+    pass
+
+
+def ask(prompt):
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        raise MenuCancelled()
+
+
+def required_answer(prompt="(默认取消):"):
+    answer = ask(prompt)
+    if not answer:
+        raise MenuCancelled()
+    return answer
+
+
+def show_value(label, value):
+    print("\n========================\n\t{} : {}\n========================\n".format(
+        label, color(" {} ".format(value), "41;37")))
+
+
+def ask_port(target=False, existing=False):
+    while True:
+        if existing:
+            print("请选择并输入要修改的 Brook 端口转发本地监听端口 [1-65535]")
+        elif target:
+            print("请输入 Brook 被转发的端口 [1-65535]")
+        else:
+            print("请输入 Brook 本地监听端口 [1-65535]（端口不能重复，避免冲突）")
+        answer = required_answer()
+        try:
+            number = port(answer)
+        except ValueError:
+            print("输入错误, 请输入正确的端口。")
+            continue
+        if existing:
+            if not any(rule[0] == number for rule in read_rules()):
+                print("{} 该本地监听端口不存在 [{}] !".format(color("[错误]", "31"), number))
+                continue
+        else:
+            show_value("被转发端口" if target else "本地监听端口", number)
+        return number
+
+
+def ask_target():
+    while True:
+        print("请输入被转发的 IP :")
+        answer = required_answer()
+        try:
+            address = host(answer)
+        except (ValueError, UnicodeError):
+            print("输入错误, 请输入正确的 IP 或域名。")
+            continue
+        show_value("被转发IP", address)
+        return address
+
+
+def ask_enabled():
+    print("立即启用该端口转发，还是禁用？ [Y/n]")
+    return (ask("(默认: Y 启用):") or "y").lower() == "y"
+
+
+def server_ip():
+    try:
+        with urllib.request.urlopen("https://ipinfo.io/ip", timeout=2) as response:
+            return str(ipaddress.ip_address(response.read(128).decode("ascii").strip()))
+    except (OSError, ValueError):
+        return "VPS_IP"
+
+
+def show_rules():
+    rules = read_rules()
+    if not rules:
+        print("{} 目前 Brook 配置文件中用户配置为空。".format(color("[信息]")))
+        return rules
+    print("当前端口转发总数: {} 当前服务器IP: {}".format(
+        color(" {} ".format(len(rules)), "42;37"), color(" {} ".format(server_ip()), "42;37")))
+    for local, remote, dest, state, _ in rules:
+        print("本地监听端口: {}\t 被转发IP: {}\t 被转发端口: {}\t 状态: {}".format(
+            color(local), color(remote), color(dest), color("启用" if state else "禁用", "32" if state else "31")))
+    print("\n========================\n")
+    return rules
+
+
+def need_brook():
+    if not BIN.exists():
+        raise ValueError("Brook 没有安装，请检查 !")
+
+
+def menu_rules():
+    need_brook()
+    print("\n你要做什么？\n {}  添加 端口转发\n {}  删除 端口转发\n {}  修改 端口转发\n {}  启用/禁用 端口转发\n \n {} 本地监听端口不能重复，被转发的IP或端口可重复!\n".format(
+        color("1."), color("2."), color("3."), color("4."), color("[注意]")))
+    action = required_answer("(默认: 取消):")
+    if action not in ("1", "2", "3", "4"):
+        raise ValueError("请输入正确的数字(1-4)")
+    while True:
+        rules = show_rules()
+        if not rules and action != "1":
+            return
+        if action == "1":
+            local = ask_port()
+            if any(rule[0] == local for rule in rules):
+                raise ValueError("该本地监听端口已使用 [{}] !".format(local))
+            remote, dest = ask_target(), ask_port(target=True)
+            args = ["add", str(local), remote, str(dest)]
+            if not ask_enabled():
                 args.append("--disabled")
-            if operation == "3":
-                new_port = input("新本地端口 [留空保持]：").strip()
-                if new_port:
-                    args += ["--new-port", new_port]
-        main(args)
+            main(args)
+            print("{} 端口转发 添加成功 {}\n".format(color("[信息]"), color(
+                "[端口: {} 被转发IP和端口: {}]".format(local, endpoint(remote, dest)))))
+            if (ask("是否继续 添加端口转发配置？[Y/n]:") or "y").lower() == "n":
+                return
+            print("{} 继续 添加端口转发配置...".format(color("[信息]")))
+        elif action == "2":
+            local = ask_port()
+            main(["delete", str(local)])
+            print("{} 端口转发 删除成功 {}\n".format(color("[信息]"), color("[端口: {}]".format(local))))
+            if not read_rules():
+                print("{} 已无任何端口 !".format(color("[错误]", "31")))
+                return
+            if (ask("是否继续 删除端口转发配置？[Y/n]:") or "y").lower() == "n":
+                return
+            print("{} 继续 删除端口转发配置...".format(color("[信息]")))
+        elif action == "3":
+            old_port = ask_port(existing=True)
+            old_rule = next(rule for rule in rules if rule[0] == old_port)
+            print("\n{} 开始输入新端口... \n".format(color("[信息]")))
+            new_port = ask_port()
+            remote, dest = ask_target(), ask_port(target=True)
+            args = ["set", str(old_port), remote, str(dest), "--new-port", str(new_port), "--listen", old_rule[4]]
+            if not ask_enabled():
+                args.append("--disabled")
+            main(args)
+            print("{} 端口转发 修改成功 {}\n".format(color("[信息]"), color(
+                "[端口: {} 被转发IP和端口: {}]".format(new_port, endpoint(remote, dest)))))
+            return
+        else:
+            local = ask_port(existing=True)
+            rule = next(rule for rule in rules if rule[0] == local)
+            label = "禁用" if rule[3] else "启用"
+            print("该端口转发已{}，是否{}？ [Y/n]".format(
+                color("启用" if rule[3] else "禁用", "32" if rule[3] else "31"),
+                color(label, "31" if rule[3] else "32")))
+            if (ask("(默认: Y {}):".format(label)) or "y").lower() != "y":
+                raise MenuCancelled()
+            main(["disable" if rule[3] else "enable", str(local)])
+            print("{} 端口转发 {}成功 {}\n".format(color("[信息]"), label, color(
+                "[端口: {} 被转发IP和端口: {}]".format(local, endpoint(rule[1], rule[2])))))
+            return
+
+
+def menu_monitor():
+    need_brook()
+    state = monitor_enabled()
+    print("\n当前监控模式: {}\n".format(color("已开启" if state else "未开启")))
+    print("确定要{} {} 功能吗？(当进程关闭则自动启动 Brook 服务端){}".format(
+        "关闭" if state else "开启", color("Brook 服务端运行状态监控"), "[y/N]" if state else "[Y/n]"))
+    if (ask("(默认: {}):".format("n" if state else "y")) or ("n" if state else "y")).lower() != "y":
+        raise MenuCancelled()
+    main(["monitor-off" if state else "monitor-on"])
+
+
+def menu():
+    print("\n  Brook 端口转发 一键管理脚本 {}\n  ---- Toyo | doub.io/wlzy-jc37 ----\n  \n {} 升级脚本\n————————————\n {} 安装 Brook\n {} 更新 Brook\n {} 卸载 Brook\n————————————\n {} 启动 Brook\n {} 停止 Brook\n {} 重启 Brook\n————————————\n {} 设置 Brook 端口转发\n {} 查看 Brook 端口转发\n {} 查看 Brook 日志\n {} 监控 Brook 运行状态\n————————————\n".format(
+        color("[v{}]".format(VERSION), "31"), *[color("{:2d}.".format(number)) for number in range(11)]))
+    if BIN.exists():
+        running = (active() if shutil.which("systemctl") else False) or bool(legacy_pids())
+        print(" 当前状态: {} {} {}".format(color("已安装"), "并" if running else "但",
+                                       color("已启动" if running else "未启动", "32" if running else "31")))
     else:
-        raise ValueError("无效选项")
+        print(" 当前状态: {}".format(color("未安装", "31")))
+    print()
+    try:
+        answer = ask(" 请输入数字 [0-10]:")
+        if answer == "0":
+            main(["self-update"])
+        elif answer in ("1", "2"):
+            if answer == "2":
+                need_brook()
+            print("请输入要下载安装的 Brook 版本号 {}\n版本列表请去这里获取：{}".format(
+                color("[ 格式是日期，例如: v20270101 ]"), color("[ https://github.com/txthinking/brook/releases ]")))
+            version = ask("直接回车即自动获取:") or "latest"
+            main(["update" if installed() else "install", version])
+        elif answer == "3":
+            need_brook()
+            print("确定要卸载 Brook ? [y/N]\n")
+            if (ask("(默认: n):") or "n").lower() != "y":
+                raise MenuCancelled()
+            main(["uninstall", "--yes"])
+        elif answer in ("4", "5", "6"):
+            main([{ "4": "start", "5": "stop", "6": "restart"}[answer]])
+        elif answer == "7":
+            menu_rules()
+        elif answer == "8":
+            need_brook()
+            show_rules()
+        elif answer == "9":
+            need_brook()
+            print("\n{} 按 {} 终止查看日志\n".format(color("[注意]"), color("Ctrl+C", "41;37")))
+            main(["logs"])
+        elif answer == "10":
+            menu_monitor()
+        else:
+            print("请输入正确数字 [0-10]")
+    except MenuCancelled:
+        print("已取消...")
 
 
 def main(argv=None):
@@ -682,10 +922,14 @@ def main(argv=None):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if command == "install":
             return install(args.version, args.sha256)
+        if command == "self-update":
+            return self_update()
         if not installed():
             raise ValueError("请先执行 install（旧安装会自动迁移）")
         if command == "update":
             return install(args.version, args.sha256, preserve_state=True)
+        if command in ("monitor-on", "monitor-off"):
+            return set_monitor(command == "monitor-on")
         if command in ("add", "set", "delete", "enable", "disable"):
             return edit_rule(command, args.port, getattr(args, "host", None),
                              getattr(args, "target_port", None), getattr(args, "listen", "0.0.0.0"),

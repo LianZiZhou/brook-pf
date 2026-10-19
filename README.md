@@ -24,6 +24,33 @@ wget -O brook-pf.sh https://raw.githubusercontent.com/LianZiZhou/brook-pf/main/b
 sudo bash /usr/local/brook-pf/brook-pf.sh
 ```
 
+从 v2.0.2 起，主菜单恢复原版的颜色、分隔线、单列布局、编号和状态提示：
+
+```text
+  Brook 端口转发 一键管理脚本 [v2.0.2]
+  ---- Toyo | doub.io/wlzy-jc37 ----
+
+  0. 升级脚本
+————————————
+  1. 安装 Brook
+  2. 更新 Brook
+  3. 卸载 Brook
+————————————
+  4. 启动 Brook
+  5. 停止 Brook
+  6. 重启 Brook
+————————————
+  7. 设置 Brook 端口转发
+  8. 查看 Brook 端口转发
+  9. 查看 Brook 日志
+ 10. 监控 Brook 运行状态
+————————————
+```
+
+`7` 的子菜单保持原版四项：添加、删除、修改、启用/禁用；保留连续添加/删除、端口及目标确认、默认取消和启用状态提示。`8` 按原版带标签显示规则。高级监听地址仍可通过命令行 `--listen` 设置，菜单修改已有规则会保留其监听地址。
+
+`0` 升级管理脚本（不会更新 Brook 二进制或主动重启转发），下载正式发布附件并验证 SHA256，同时更新当前脚本和已安装副本。`10` 保留原版监控开关及确认方式，底层使用 systemd 的重启策略；关闭监控不会停止正在运行的转发，设置在重启服务器后仍保留。主动执行“停止 Brook”会保持停止状态。
+
 全新安装默认没有转发规则，服务会等待添加规则。安装会启用开机启动；迁移会短暂中断现有连接。管理脚本本身不会创建代理账户，也不需要 Brook 密码。
 
 ## 系统要求
@@ -130,7 +157,7 @@ sudo bash /usr/local/brook-pf/brook-pf.sh update v20270101
 sudo bash /usr/local/brook-pf/brook-pf.sh uninstall
 ```
 
-`update` 更新 Brook 并安装当前执行的管理脚本，不会自行从网络替换管理器代码。**更新管理脚本**时，重新下载本仓库的 `brook-pf.sh`，再执行 `sudo bash brook-pf.sh update`。全新安装及旧版迁移请用 `install`。
+`update` 更新 Brook 并安装当前执行的管理脚本。**更新管理脚本**可选择菜单 `0` 或运行 `sudo bash /usr/local/brook-pf/brook-pf.sh self-update`。从 v2.0.0/v2.0.1 升级时，先重新下载本仓库的 `brook-pf.sh`，再执行 `sudo bash brook-pf.sh self-update`；全新安装及旧版迁移请用 `install`。
 
 所有下载使用系统 TLS 校验；安装包 SHA256 必须匹配 GitHub Releases 资产的 `digest`。没有摘要的旧发布需要传入你独立核实的 `--sha256 HEX`，不会静默降级为不校验。摘要校验能够发现文件不一致，并不代替上游发布者的签名。
 
@@ -138,7 +165,7 @@ sudo bash /usr/local/brook-pf/brook-pf.sh uninstall
 
 下载/配置校验失败不会停止旧服务。安装或修改配置后，新服务启动失败会尝试恢复旧文件、配置、cron 和服务状态。自动恢复若失败，会明确输出备份目录；应停止重试并检查日志及备份。启动检查会确认每个 Brook 子进程已建立 TCP 和 UDP 监听，不代表远端地址可达，请另行检查业务流量。
 
-修改规则会重启全部转发进程，已有连接可能中断。手工停止服务后修改规则只保存配置，不会自行启动。systemd 负责崩溃重启；60 秒内连续失败 5 次会停止重试，可用 `restart` 清除失败状态后重试。
+修改规则会重启全部转发进程，已有连接可能中断。手工停止服务后修改规则只保存配置，不会自行启动。监控开启时，systemd 负责进程退出后的重启；60 秒内连续失败 5 次会停止重试，可用 `restart` 清除失败状态后重试。
 
 ## 开发与测试
 

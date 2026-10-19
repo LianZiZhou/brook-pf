@@ -16,7 +16,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -v
           bash brook-pf.sh --help
-          printf '0\n' | bash brook-pf.sh menu
+          printf '99\n' | bash brook-pf.sh menu
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
