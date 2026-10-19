@@ -27,8 +27,8 @@ sudo bash /usr/local/brook-pf/brook-pf.sh
 从 v2.0.2 起，主菜单恢复原版的颜色、分隔线、单列布局、编号和状态提示：
 
 ```text
-  Brook 端口转发 一键管理脚本 [v2.0.2]
-  ---- Toyo | doub.io/wlzy-jc37 ----
+  Brook 端口转发 一键管理脚本 [v2.0.3]
+  ---- LianZiZhou | github.com/LianZiZhou/brook-pf ----
 
   0. 升级脚本
 ————————————

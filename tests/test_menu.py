@@ -46,7 +46,7 @@ class MenuTests(unittest.TestCase):
         output, prompt, dispatch = self.invoke(["99"])
         expected = """
   Brook 端口转发 一键管理脚本 [v{version}]
-  ---- Toyo | doub.io/wlzy-jc37 ----
+  ---- LianZiZhou | github.com/LianZiZhou/brook-pf ----
   
   0. 升级脚本
 ————————————
