@@ -140,7 +140,8 @@ def test_all():
         if cached:
             metadata = json.loads(Path(os.environ["BROOK_PF_TEST_RELEASE"]).read_text())
             tag, url, digest = m.release_asset(metadata, m.architecture())
-            candidate = Path(cached)
+            candidate = directory / "brook"
+            shutil.copyfile(cached, str(candidate))
             m.verify_binary(candidate, digest)
             info = {"version": tag, "sha256": digest, "asset": url, "manager": m.VERSION}
         else:
